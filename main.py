@@ -15,9 +15,13 @@ i2c = busio.I2C(board.SCL, board.SDA)
 ads = ADS.ADS1115(i2c)
  
 # Define the analog input channel
-channel = AnalogIn(ads, ADS.P0)
+channel1 = AnalogIn(ads, ADS.P0)
+channel2 = AnalogIn(ads, ADS.P1)
  
 # Loop to read the analog input continuously
 while True:
-    print("Analog Value: ", channel.value, "Voltage: ", channel.voltage)
+    print("Analog Value: ", channel1.value, "Voltage: ", channel1.voltage)
+    time.sleep(0.2)
+
+    print("Difference Value: ", (channel2.value - channel1.value), "Dff Voltage: ", (channel2.voltage - channel1.voltage)
     time.sleep(0.2)
