@@ -1,68 +1,84 @@
-"""
-Reads CT burden‐resistor voltage differentially, computes Vrms and primary current.
-Automatically sets the max data rate, aligns sample count, and retries on I²C errors.
-"""
+########################################################################
+# IoT Project: Home Information System
+# main.py
+# Group 10
+# Drew Schultz, Robby Modica, Alex Viner, Tiger Slowinski
+# Current sensor information collection and transmission program
+# 3 Current sensors and an ESP32 for hardware talking to a Raspberry Pi
+########################################################################
 
-import time, math
-import board, busio
-import adafruit_ads1x15.ads1115 as ADS
-from adafruit_ads1x15.analog_in import AnalogIn
+import time
+import math
+from machine import I2C, Pin
+import network
+from umqtt.simple import MQTTClient
+import ads1x15
+import secrets #WiFi and MQTT configurations
 
-# ─── USER CONFIG ────────────────────────────────────────────────────────────
+# ─── CONFIGURATION ──────────────────────────────────────────────────────────
+I2C_SDA       = 21      #GPIO21
+I2C_SCL       = 22      #GPIO22
+BURDEN_OHMS   = 20.0    #Burden resistor value in ohms between sensor leads
+CT_RATIO      = 2000.0  #1:2000 transformer
+AC_FREQUENCY  = 60.0    #Hz
+DATA_RATE     = 860     #Samples per second
+CALIBRATION   = 1.57    #6.25A device read 4.0A, real world variation correction
 
-AC_FREQUENCY      = 60.0      # mains frequency (Hz)
-BURDEN_OHMS       = 20.0      # ohms
-CT_RATIO          = 2000.0    # primary : secondary turns
-PGA               = 1         # gain (±4.096 V)
-# ─────────────────────────────────────────────────────────────────────────────
+# ─── SETUP Wi‑Fi ────────────────────────────────────────────────────────────
+wlan = network.WLAN(network.STA_IF)
+wlan.active(True)
+wlan.connect(secrets.ssid, secrets.password) #Pull from secrets file
+while not wlan.isconnected():
+    time.sleep(0.5)
+print('Wi‑Fi connected, IP:', wlan.ifconfig())
 
-# Set up I²C + ADS1115
-i2c   = busio.I2C(board.SCL, board.SDA)
-ads   = ADS.ADS1115(i2c, address=0x48)
-ads.gain      = PGA
-ads.data_rate = 860
+# ─── SETUP MQTT ─────────────────────────────────────────────────────────────
+client = MQTTClient(secrets.client_id, secrets.mqtt_broker, secrets.mqtt_port)
+client.connect()
 
-# differential channel A0 (+) / A1 (–)
-diff_chan = AnalogIn(ads, ADS.P0, ADS.P1)
+# ─── SETUP I²C & ADS1115 ────────────────────────────────────────────────────
+i2c = I2C(1, scl=Pin(I2C_SCL), sda=Pin(I2C_SDA))
 
-# figure out how many samples we can actually get per cycle
-SAMPLES_PER_CYCLE = max(1, int(ads.data_rate / AC_FREQUENCY))
+# Create ADC instances with simple names
+ads_1 = ads1x15.ADS1115(i2c, address=0x48)  # First ADS1115
+ads_2 = ads1x15.ADS1115(i2c, address=0x49)  # Second ADS1115
 
-def measure_v_rms(samples):
+# List of (adc, differential_channel) pairs
+channels = [
+    (ads_1, 0),  # ADS1115 #1, AIN0-AIN1
+    (ads_1, 1),  # ADS1115 #1, AIN2-AIN3
+    (ads_2, 0)   # ADS1115 #2, AIN0-AIN1
+]
+
+# SAMPLES per AC cycle
+SAMPLES_PER_CYCLE = max(1, int(DATA_RATE / AC_FREQUENCY))
+
+# ─── RMS MEASUREMENT ─────────────────────────────────────────────────────────
+#Differential voltage reading
+def measure_v_rms(adc, diff_channel, samples):
     sum_sq = 0.0
-    valid  = 0
+    valid = 0
     for _ in range(samples):
         try:
-            v = diff_chan.voltage
-        except OSError as e:
-            print("I2C read error, retrying…", e)
+            raw = adc.read_diff(diff_channel)  # Proper diff read
+            voltage = raw * 4.096 / 32768
+            sum_sq += voltage * voltage
+            valid += 1
+        except OSError:
             time.sleep(0.005)
-            continue
-        sum_sq += v * v
-        valid  += 1
     return math.sqrt(sum_sq / valid) if valid else 0.0
 
-def main():
-    period = 1.0  # seconds per measurement
-    print(f"→ Sampling at {ads.data_rate} SPS → {SAMPLES_PER_CYCLE} samples/cycle")
-    try:
-        while True:
-            t0 = time.monotonic()
-            vrms   = measure_v_rms(SAMPLES_PER_CYCLE)
-            i_sec  = vrms / BURDEN_OHMS
-            i_prim = i_sec * CT_RATIO
-            if i_prim > .05:
-                print(f"Current: {i_prim:6.3f} A")
-            else: 
-                print(f"Current: {0} A")
-                
-            # sleep the remainder of the 1-second period
-            elapsed = time.monotonic() - t0
-            to_sleep = period - elapsed
-            if to_sleep > 0:
-                time.sleep(to_sleep)
-    except KeyboardInterrupt:
-        print("\nDone.")
-
-if __name__ == "__main__":
-    main()
+# ─── MAIN LOOP: SAMPLE & PUBLISH ─────────────────────────────────────────────
+while True:
+    start_ms = time.ticks_ms()
+    for idx, (adc, diff_ch) in enumerate(channels, start=1):
+        vrms = measure_v_rms(adc, diff_ch, SAMPLES_PER_CYCLE) #Voltage differential at ADC
+        i_sec  = vrms / BURDEN_OHMS                           #Current calculation at ADC
+        i_prim = i_sec * CT_RATIO * CALIBRATION               #Current calculation at current sensor
+        topic  = b"home/ct/device%d" % idx
+        payload = b"%.3f" % i_prim
+        client.publish(topic, payload)
+    elapsed = time.ticks_diff(time.ticks_ms(), start_ms)
+    #One second intervals of sending sensor data
+    if elapsed < 1000:
+        time.sleep_ms(1000 - elapsed)
