@@ -21,22 +21,12 @@ import requests
 import schedule
 import paho.mqtt.client as mqtt
 from influxdb_client_3 import InfluxDBClient3, Point
+import secrets
 
 # ─── CONFIG ──────────────────────────────────────────────────────────────────
-
-ZIP_CODE      = "52240" # Iowa City, Iowa 
-LOCAL_TZ      = ZoneInfo("America/Chicago") # Central Time Zone
-
-INFLUX_URL    = "https://us-east-1-1.aws.cloud2.influxdata.com"
-INFLUX_TOKEN  = "lJ_5g-CA_aHvot1KIy7gspM6eXlQ8zufPujZ523F8aAMH765W_e0oBuIQh_QZS7eLCE8HZRDxH8oewNpIHx_tQ=="
-INFLUX_ORG    = "iot"
-INFLUX_BUCKET = "esp32_currentdata"
-
-MQTT_BROKER   = "192.168.1.207"  # IP of Raspberry Pi , school ip: 172.23.42.87
-MQTT_PORT     = 1883
-MQTT_TOPICS   = [("home/ct/device1", 0),
-                 ("home/ct/device2", 0),
-                 ("home/ct/device3", 0)]
+#
+# "secret information, wifi, IP's, Database keys...
+#
 
 OFFSET_TEMP   = 20  #Offset temp for indoor temp sensor degrees F
 
